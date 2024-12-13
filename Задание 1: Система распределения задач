@@ -1,0 +1,98 @@
+import time
+
+class Server:
+    def __init__(self, server_id):
+        self.id = server_id
+        self.current_task = None  # текущее задание
+        self.total_time = 0  # общее время выполнения
+
+    def is_free(self):
+        return self.current_task is None
+
+class TaskSystem:
+    def __init__(self, number_of_servers):
+        # список серверов
+        self.servers = []
+        for i in range(number_of_servers):
+            self.servers.append(Server(i + 1))
+        
+        # очередь 
+        self.task_queue = []
+
+    def add_task(self, task_time):
+        free_server = None
+        min_total_time = float('inf')
+
+        for server in self.servers:
+            if server.is_free() and server.total_time < min_total_time:
+                free_server = server
+                min_total_time = server.total_time
+
+        if free_server:
+            free_server.current_task = task_time
+            free_server.total_time += task_time
+            print(f"Задание с {task_time} секундами выполнения направлено на Сервер {free_server.id}")
+        else:
+            # Если все серверы заняты, не толпимся товарищи становимся в очередь 
+            self.task_queue.append(task_time)
+            print(f"Задание с {task_time} секундами выполнения добавлено в очередь")
+
+    def process_tasks(self):
+        # обновляем сост. серверов
+        for server in self.servers:
+            if server.current_task is not None:
+                # уменьшаем время
+                server.current_task -= 1
+                if server.current_task <= 0:
+                    server.current_task = None
+
+        # назначаем задания из очереди
+        while self.task_queue:
+            # и где наш свободный сервер?
+            free_server = None
+            min_total_time = float('inf')
+            
+            for server in self.servers:
+                if server.is_free() and server.total_time < min_total_time:
+                    free_server = server
+                    min_total_time = server.total_time
+            
+            if free_server:
+                #  задание из очереди
+                task_time = self.task_queue.pop(0)
+                free_server.current_task = task_time
+                free_server.total_time += task_time
+                print(f"Задание из очереди направлено на Сервер {free_server.id}")
+            else:
+                break
+
+    def show_status(self):
+        print("\nСостояние серверов:")
+        for server in self.servers:
+            status = "пусто" if server.is_free() else f"выполняет задание (осталось {server.current_task} сек.)"
+            print(f"Сервер {server.id}: {status}")
+        
+        print(f"Очередь заданий: {self.task_queue if self.task_queue else 'нет'}")
+
+# Пример использования
+def main():
+    # Создаем систему с 3 серверами
+    print("Добро пожаловать!")
+    system = TaskSystem(3)
+    
+    # Добавляем задания
+    print("\nДобавление заданий:")
+    system.add_task(5)  # 5 сек.
+    system.add_task(3)  # 3 сек.
+    system.add_task(7)  # 7 сек.
+    system.add_task(2)  # 2 сек. 
+    
+    # Симулируем работу системы
+    print("\nНачинаем обработку:")
+    for i in range(8):  
+        system.show_status()
+        system.process_tasks()
+        time.sleep(1)  # пауза в 1 сек.
+
+if __name__ == "__main__":
+    main()
