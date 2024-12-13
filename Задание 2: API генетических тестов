@@ -1,0 +1,150 @@
+from flask import Flask, request, jsonify
+import sqlite3
+from datetime import datetime
+
+app = Flask(__name__)
+
+# база данных и таблицы
+def init_db():
+    conn = sqlite3.connect('genetic_tests.db')
+    c = conn.cursor()
+    
+  
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS genetic_tests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            animal_name TEXT NOT NULL,
+            species TEXT NOT NULL,
+            test_date DATE NOT NULL,
+            milk_yield FLOAT NOT NULL,
+            health_status TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    conn.commit()
+    conn.close()
+
+init_db()
+
+# 1. новый тест
+@app.route('/tests', methods=['POST'])
+def add_test():
+    try:
+        data = request.json
+        
+        # проверяем наличие всех полей
+        required_fields = ['animal_name', 'species', 'test_date', 'milk_yield', 'health_status']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({'error': f'Поле {field} обязательно'}), 400
+        
+        # проверка health_status на правильное значение
+        if data['health_status'] not in ['good', 'poor']:
+            return jsonify({'error': 'health_status должен быть "good" или "poor"'}), 400
+        
+        conn = sqlite3.connect('genetic_tests.db')
+        c = conn.cursor()
+        
+        c.execute('''
+            INSERT INTO genetic_tests (animal_name, species, test_date, milk_yield, health_status)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (
+            data['animal_name'],
+            data['species'],
+            data['test_date'],
+            data['milk_yield'],
+            data['health_status']
+        ))
+        
+        test_id = c.lastrowid
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            'message': 'Данные успешно добавлены',
+            'id': test_id
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# 2. получаем список всех тестов
+@app.route('/tests', methods=['GET'])
+def get_tests():
+    try:
+        species = request.args.get('species')  # фильтрации, если есть
+        
+        conn = sqlite3.connect('genetic_tests.db')
+        c = conn.cursor()
+        
+        if species:
+            # если указан вид животного, фильтруем по виду
+            c.execute('SELECT * FROM genetic_tests WHERE species = ?', (species,))
+        else:
+            
+            c.execute('SELECT * FROM genetic_tests')
+            
+        tests = c.fetchall()
+        conn.close()
+        
+        # преобразуем в список словарей
+        result = []
+        for test in tests:
+            result.append({
+                'id': test[0],
+                'animal_name': test[1],
+                'species': test[2],
+                'test_date': test[3],
+                'milk_yield': test[4],
+                'health_status': test[5]
+            })
+            
+        return jsonify(result)
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/statistics', methods=['GET'])
+def get_statistics():
+    try:
+        conn = sqlite3.connect('genetic_tests.db')
+        c = conn.cursor()
+        
+        # список всех видов животных
+        c.execute('SELECT DISTINCT species FROM genetic_tests')
+        species_list = c.fetchall()
+        
+        statistics = []
+        for species in species_list:
+            species_name = species[0]
+            
+            # статистика для каждого вида
+            c.execute('''
+                SELECT 
+                    COUNT(*) as total_tests,
+                    AVG(milk_yield) as avg_milk_yield,
+                    MAX(milk_yield) as max_milk_yield,
+                    SUM(CASE WHEN health_status = 'good' THEN 1 ELSE 0 END) * 100.0 / COUNT(*) as health_percentage
+                FROM genetic_tests
+                WHERE species = ?
+            ''', (species_name,))
+            
+            stats = c.fetchone()
+            
+            statistics.append({
+                'species': species_name,
+                'total_tests': stats[0],
+                'avg_milk_yield': round(stats[1], 2),
+                'max_milk_yield': stats[2],
+                'good_health_percentage': round(stats[3], 2)
+            })
+        
+        conn.close()
+        return jsonify({'statistics': statistics})
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+if __name__ == '__main__':
+    app.run(debug=True)
