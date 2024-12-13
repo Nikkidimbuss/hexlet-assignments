@@ -1,0 +1,205 @@
+from flask import Flask, request, jsonify
+import sqlite3
+from datetime import datetime
+import time
+from threading import Thread
+from collections import defaultdict
+
+app = Flask(__name__)
+
+# Инициализация БД
+def init_db():
+    conn = sqlite3.connect('shop.db')
+    c = conn.cursor()
+    
+    # Таблица товаров
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS items (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            category TEXT NOT NULL
+        )
+    ''')
+    
+    # Таблица покупок
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS purchases (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            item_id TEXT NOT NULL,
+            purchase_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # Таблица рекомендаций
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS recommendations (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            item_id TEXT NOT NULL,
+            score FLOAT NOT NULL
+        )
+    ''')
+    
+    conn.commit()
+    conn.close()
+
+init_db()
+
+# Вспомогательные функции
+def get_user_purchases(user_id):
+    """Получение списка покупок пользователя"""
+    conn = sqlite3.connect('shop.db')
+    c = conn.cursor()
+    c.execute('SELECT item_id FROM purchases WHERE user_id = ?', (user_id,))
+    purchases = [row[0] for row in c.fetchall()]
+    conn.close()
+    return purchases
+
+def get_item_pairs():
+    """Подсчет пар товаров, которые покупают вместе"""
+    conn = sqlite3.connect('shop.db')
+    c = conn.cursor()
+    
+    # Получаем все покупки, сгруппированные по пользователям
+    c.execute('SELECT user_id, item_id FROM purchases')
+    user_purchases = defaultdict(list)
+    for user_id, item_id in c.fetchall():
+        user_purchases[user_id].append(item_id)
+    
+    # Считаем, сколько раз товары покупали вместе
+    pair_counts = defaultdict(int)
+    for items in user_purchases.values():
+        for i in range(len(items)):
+            for j in range(i + 1, len(items)):
+                # Создаем пару товаров (всегда в одинаковом порядке)
+                item_pair = tuple(sorted([items[i], items[j]]))
+                pair_counts[item_pair] += 1
+    
+    conn.close()
+    return pair_counts
+
+def generate_recommendations(user_id):
+    """Генерация рекомендаций для пользователя"""
+    # Получаем уже купленные товары
+    user_items = set(get_user_purchases(user_id))
+    
+   
+    if not user_items:
+        return []
+    
+    
+    pair_counts = get_item_pairs()
+    
+ 
+    recommendations = defaultdict(int)
+    for (item1, item2), count in pair_counts.items():
+        if item1 in user_items and item2 not in user_items:
+            recommendations[item2] += count
+        elif item2 in user_items and item1 not in user_items:
+            recommendations[item1] += count
+    
+    # Сортируем по популярности
+    sorted_recommendations = sorted(
+        recommendations.items(),
+        key=lambda x: x[1],
+        reverse=True
+    )
+    
+    # Сохраняем рекомендации в базу
+    conn = sqlite3.connect('shop.db')
+    c = conn.cursor()
+    
+    # Удаляем старые рекомендации
+    c.execute('DELETE FROM recommendations WHERE user_id = ?', (user_id,))
+    
+    # Добавляем новые
+    for item_id, score in sorted_recommendations[:5]:  # берем топ-5
+        c.execute('''
+            INSERT INTO recommendations (id, user_id, item_id, score)
+            VALUES (?, ?, ?, ?)
+        ''', (f"{user_id}_{item_id}", user_id, item_id, score))
+    
+    conn.commit()
+    conn.close()
+    
+    return sorted_recommendations
+
+
+
+@app.route('/purchases', methods=['POST'])
+def add_purchase():
+    """Добавление новой покупки"""
+    try:
+        data = request.json
+        user_id = data['user_id']
+        cart = data['cart']
+        
+        conn = sqlite3.connect('shop.db')
+        c = conn.cursor()
+        
+        # Добавляем каждый товар из корзины
+        for item in cart:
+            purchase_id = f"{user_id}_{item['item_id']}_{int(time.time())}"
+            c.execute('''
+                INSERT INTO purchases (id, user_id, item_id)
+                VALUES (?, ?, ?)
+            ''', (purchase_id, user_id, item['item_id']))
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({"status": "purchases_added"})
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/generate_recommendations', methods=['POST'])
+def start_recommendations():
+    """Запуск генерации рекомендаций"""
+    try:
+        data = request.json
+        user_id = data['user_id']
+        
+        # Запускаем генерацию в отдельном потоке
+        Thread(target=generate_recommendations, args=(user_id,)).start()
+        
+        return jsonify({"status": "recommendations_generation_started"})
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/recommendations', methods=['GET'])
+def get_recommendations():
+    """Получение рекомендаций"""
+    try:
+        user_id = request.args.get('user_id')
+        
+        conn = sqlite3.connect('shop.db')
+        c = conn.cursor()
+        
+        # Получаем рекомендации из базы
+        c.execute('''
+            SELECT item_id, score 
+            FROM recommendations 
+            WHERE user_id = ?
+            ORDER BY score DESC
+        ''', (user_id,))
+        
+        recommendations = [
+            {
+                "item_id": row[0],
+                "score": row[1]
+            }
+            for row in c.fetchall()
+        ]
+        
+        conn.close()
+        
+        return jsonify({"recommendations": recommendations})
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+if __name__ == '__main__':
+    app.run(debug=True)
